@@ -61,9 +61,6 @@ public:
        {0.0, dt}});
 
     // 障害物の設定
-    //std::vector<casadi::DM> obs_pos_list = {{3.0, 0.0}, {4.0, 0.0}, {4.0, 1.0}};
-    //std::vector<casadi::DM> obs_pos_list = {{3.0, 0.0}, {4.0, 1.0}, {4.0, 2.0}};
-    //std::vector<casadi::DM> obs_pos_list = {{3.0, 0.0}, {4.0, 0.0}, {4.0, 1.0}};
     vehicle_diameter = 0.25;
     obs_diameter = 0.25;
     obs_r = vehicle_diameter + obs_diameter;
@@ -85,20 +82,17 @@ public:
       "local_obstacle_markers", 10,
       std::bind(&MPCNode::local_obstacle_callback, this, std::placeholders::_1));
 
+    // waypoint（目標位置）をSubscribe
+    target_sub = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "waypoint", 10, std::bind(&MPCNode::target_callback, this, _1));
+
     // MPCの実行タイマー
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(static_cast<int>(dt * 1000)), std::bind(&MPCNode::mpc_step, this));
 
-    // 静的な変換を送信するタイマー
-    // static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
-    // send_static_transform();
-
     // 時刻の初期化
     current_time = this->get_clock()->now();
     last_time = this->get_clock()->now();
-
-    // 座標変換とパス出力
-    //publish_transform_and_path(xTrue);
   }
 
 private:
@@ -106,12 +100,6 @@ private:
   {
     // MPC制御の解
     casadi::DM uopt = solve_mpc(xTrue);
-
-    // 状態の更新
-    //xTrue = update_state(xTrue, uopt);
-
-    // 座標変換とパス出力
-    //publish_transform_and_path(xTrue);
 
     // MPC予測軌道を出力
     publish_predicted_path();
@@ -235,6 +223,24 @@ private:
     }
   }
 
+  void target_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  {
+    // Update xTarget with the new goal position
+    xTarget(0) = msg->pose.position.x;
+    xTarget(1) = msg->pose.position.y;
+
+    tf2::Quaternion quat;
+    tf2::fromMsg(msg->pose.orientation, quat);
+    tf2::Matrix3x3 mat(quat);
+    double roll, pitch, yaw;
+    mat.getRPY(roll, pitch, yaw);
+
+    xTarget(2) = yaw;
+
+    // Print the updated target for demonstration purposes
+    //RCLCPP_INFO(this->get_logger(), "New target: [%f, %f, %f]", xTarget(0), xTarget(1), xTarget(2));
+  }
+
   void publish_predicted_path()
   {
     nav_msgs::msg::Path path_msg;
@@ -257,68 +263,11 @@ private:
     mpc_predicted_path_pub->publish(path_msg);
   }
 
-  // void publish_transform_and_path(const casadi::DM & xTrue)
-  // {
-  //   // 結果を格納
-  //   x = xTrue(0).scalar();
-  //   y = xTrue(1).scalar();
-  //   th = xTrue(2).scalar();
-
-  //   // 座標変換（odom to base_link）
-  //   tf2::Quaternion odom_quat;
-  //   odom_quat.setRPY(0, 0, th);  // ロール、ピッチ、ヨーをセット
-  //   geometry_msgs::msg::Quaternion odom_quat_msg =
-  //     tf2::toMsg(odom_quat);    // tf2::Quaternionからgeometry_msgs::msg::Quaternionに変換
-
-  //   geometry_msgs::msg::TransformStamped odom_trans;
-  //   odom_trans.header.stamp = current_time;
-  //   odom_trans.header.frame_id = "odom";
-  //   odom_trans.child_frame_id = "base_link";
-
-  //   odom_trans.transform.translation.x = x;
-  //   odom_trans.transform.translation.y = y;
-  //   odom_trans.transform.translation.z = 0.0;
-  //   odom_trans.transform.rotation = odom_quat_msg;
-
-  //   odom_broadcaster->sendTransform(odom_trans);
-
-  //   // パスを格納
-  //   geometry_msgs::msg::PoseStamped this_pose_stamped;
-  //   this_pose_stamped.pose.position.x = x;
-  //   this_pose_stamped.pose.position.y = y;
-  //   this_pose_stamped.pose.orientation = odom_quat_msg;
-  //   this_pose_stamped.header.stamp = current_time;
-  //   this_pose_stamped.header.frame_id = "odom";
-  //   path.header.frame_id = "odom";
-  //   path.poses.push_back(this_pose_stamped);
-
-  //   // パスを公開
-  //   path_pub->publish(path);
-
-  //   // 時刻を更新
-  //   last_time = current_time;
-  // }
-
-  // void send_static_transform()
-  // {
-  //   geometry_msgs::msg::TransformStamped static_transform_stamped;
-  //   static_transform_stamped.header.stamp = this->get_clock()->now();
-  //   static_transform_stamped.header.frame_id = "map";
-  //   static_transform_stamped.child_frame_id = "odom";
-  //   static_transform_stamped.transform.translation.x = 0.0;
-  //   static_transform_stamped.transform.translation.y = 0.0;
-  //   static_transform_stamped.transform.translation.z = 0.0;
-  //   static_transform_stamped.transform.rotation.x = 0.0;
-  //   static_transform_stamped.transform.rotation.y = 0.0;
-  //   static_transform_stamped.transform.rotation.z = 0.0;
-  //   static_transform_stamped.transform.rotation.w = 1.0;
-  //   static_broadcaster_->sendTransform(static_transform_stamped);
-  // }
-
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr mpc_predicted_path_pub;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub;
   rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr local_obstacle_subscriber;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr target_sub;
   rclcpp::TimerBase::SharedPtr timer_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> odom_broadcaster;
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_;
