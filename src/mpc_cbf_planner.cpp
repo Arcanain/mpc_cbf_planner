@@ -44,8 +44,10 @@ public:
     // umax = casadi::DM({1, 1});
     // umin = casadi::DM({-2, -1});
     // umax = casadi::DM({2, 1});
-    umin = casadi::DM({-0.5, -0.5});
-    umax = casadi::DM({0.5, 0.5});
+    umin = casadi::DM({-0.5, -0.5}); // {m/s, rad/s}
+    umax = casadi::DM({0.5, 0.5});   // {m/s, rad/s}
+    delta_umin = casadi::DM({-10.0, -10.0}); // {m/s^2, rad/s^2}
+    delta_umax = casadi::DM({10.0, 10.0});   // {m/s^2, rad/s^2}
 
     // 初期状態の設定
     xTrue = casadi::DM({0.0, 0.0, 0.0});
@@ -57,8 +59,8 @@ public:
     A = casadi::DM::eye(nx);
     B = casadi::DM(
       {{dt * cos(xTrue(2).scalar()), 0.0},
-       {dt * sin(xTrue(2).scalar()), 0.0},
-       {0.0, dt}});
+        {dt * sin(xTrue(2).scalar()), 0.0},
+        {0.0, dt}});
 
     // 障害物の設定
     vehicle_diameter = 0.25;
@@ -149,12 +151,22 @@ private:
       opti.subject_to(u(i) <= umax);
     }
 
+    // 制御入力変化量に対する制約条件を定義
+    for (int i = 0; i < N - 1; ++i) {
+      opti.subject_to(delta_umin <= u(i + 1) - u(i));
+      opti.subject_to(u(i + 1) - u(i) <= delta_umax);
+    }
+
     // 障害物制約条件を定義
     for (int i = 0; i < N; ++i) {
       for (int j = 0; j < num_obstacles; ++j) {
         const auto & obs_pos = obs_pos_list[j];
-        casadi::MX b = mtimes((x(Slice(0, 2), i) - obs_pos).T(), (x(Slice(0, 2), i) - obs_pos)) - obs_r * obs_r;
-        casadi::MX b_next = mtimes((x(Slice(0, 2), i + 1) - obs_pos).T(), (x(Slice(0, 2), i + 1) - obs_pos)) - obs_r * obs_r;
+        casadi::MX b =
+          mtimes((x(Slice(0, 2), i) - obs_pos).T(), (x(Slice(0, 2), i) - obs_pos)) - obs_r * obs_r;
+        casadi::MX b_next =
+          mtimes(
+          (x(Slice(0, 2), i + 1) - obs_pos).T(),
+          (x(Slice(0, 2), i + 1) - obs_pos)) - obs_r * obs_r;
         opti.subject_to(b_next - b + gamma * b >= 0);
       }
     }
@@ -184,8 +196,8 @@ private:
     casadi::DM A = casadi::DM::eye(nx);
     casadi::DM B = casadi::DM(
       {{dt * cos(xTrue(2).scalar()), 0.0},
-       {dt * sin(xTrue(2).scalar()), 0.0},
-       {0.0, dt}});
+        {dt * sin(xTrue(2).scalar()), 0.0},
+        {0.0, dt}});
     casadi::DM xUpdated = mtimes(A, xTrue) + mtimes(B, uopt);
     return xUpdated;
   }
@@ -210,7 +222,7 @@ private:
   {
     obs_pos_list.clear();  // Clear the list before adding new positions
 
-    for (const auto &marker : msg->markers) {
+    for (const auto & marker : msg->markers) {
       if (marker.type == visualization_msgs::msg::Marker::CYLINDER) {
         casadi::DM pos = casadi::DM({marker.pose.position.x, marker.pose.position.y});
         obs_pos_list.push_back(pos);
@@ -218,8 +230,10 @@ private:
     }
 
     // Debug output
-    for (const auto &pos : obs_pos_list) {
-      RCLCPP_INFO(this->get_logger(), "Obstacle position: (%.2f, %.2f)", pos(0).scalar(), pos(1).scalar());
+    for (const auto & pos : obs_pos_list) {
+      RCLCPP_INFO(
+        this->get_logger(), "Obstacle position: (%.2f, %.2f)", pos(0).scalar(), pos(
+          1).scalar());
     }
   }
 
@@ -276,7 +290,7 @@ private:
   double dt;
   int nx, nu, N;
   casadi::DM A, B, Q, R, P, xTrue;
-  casadi::DM umin, umax;
+  casadi::DM umin, umax, delta_umin, delta_umax;
   casadi::DM xTarget;
   casadi::DM vehicle_diameter, obs_diameter, obs_r, p;
   casadi::DM mpc_predicted_path_val;
