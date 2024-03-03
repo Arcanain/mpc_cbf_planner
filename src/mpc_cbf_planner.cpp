@@ -28,22 +28,14 @@ public:
     dt = 0.25;
     nx = 3;
     nu = 2;
-    N = 20;
+    N = 10;
     P = 100 * casadi::DM::eye(nx);
-    // Q = casadi::DM::diag(casadi::DM({10.0, 10.0, 1.0}));
-    // R = casadi::DM::diag(casadi::DM({1.0, 0.1}));
-    // Q = casadi::DM::diag(casadi::DM({1.0, 1.0, 1.0}));
-    // R = casadi::DM::diag(casadi::DM({1.0, 0.1}));
     Q = casadi::DM::diag(casadi::DM({10.0, 10.0, 1.0}));
     R = casadi::DM::diag(casadi::DM({1.0, 1.0}));
-    p = 200;
+    p = 500;
     gamma = 0.2;
 
-    // 制約の設定
-    // umin = casadi::DM({-1, -1});
-    // umax = casadi::DM({1, 1});
-    // umin = casadi::DM({-2, -1});
-    // umax = casadi::DM({2, 1});
+    // 制御入力制約の設定
     umin = casadi::DM({-0.5, -0.5}); // {m/s, rad/s}
     umax = casadi::DM({0.5, 0.5});   // {m/s, rad/s}
     delta_umin = casadi::DM({-10.0, -10.0}); // {m/s^2, rad/s^2}
@@ -167,28 +159,66 @@ private:
           mtimes(
           (x(Slice(0, 2), i + 1) - obs_pos).T(),
           (x(Slice(0, 2), i + 1) - obs_pos)) - obs_r * obs_r;
-        opti.subject_to(b_next - b + gamma * b >= 0);
+        opti.subject_to(b_next - b + gamma * b >= 0.0);
+        //cost += delta(j, i) * p * delta(j, i); // スラック変数に対するペナルティ項
       }
     }
 
     // 最適化問題を解く
-    opti.minimize(cost);
-    opti.solver("ipopt");
-    casadi::OptiSol sol = opti.solve();
+    try {
+        // 最適化問題を解く
+        opti.minimize(cost);
+        opti.solver("ipopt");
+        casadi::OptiSol sol = opti.solve();
 
-    // MPC予測軌道の値を保存
-    mpc_predicted_path_val = sol.value(x);
+        // MPC予測軌道の値を保存
+        mpc_predicted_path_val = sol.value(x);
 
-    // 結果を出力
-    casadi::DM xopt = sol.value(x);
-    casadi::DM uopt = sol.value(u(Slice(), 0));
-    casadi::DM Jopt = sol.value(cost);
+        // 結果を出力
+        casadi::DM xopt = sol.value(x);
+        casadi::DM uopt = sol.value(u(Slice(), 0));
+        casadi::DM Jopt = sol.value(cost);
 
-    RCLCPP_INFO_STREAM(this->get_logger(), "xopt: " << sol.value(x));
-    RCLCPP_INFO_STREAM(this->get_logger(), "uopt: " << sol.value(u));
-    RCLCPP_INFO_STREAM(this->get_logger(), "Jopt: " << sol.value(cost));
+        return uopt;
+    } catch (const casadi::CasadiException& e) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Solver failed: " << e.what());
 
-    return uopt;
+        // フォールバック戦略: 緊急停止
+        if (std::string(e.what()).find("Infeasible_Problem_Detected") != std::string::npos) {
+            RCLCPP_WARN_STREAM(this->get_logger(), "Infeasible problem detected. Executing emergency stop.");
+            return casadi::DM::zeros(nu, 1); // 制御入力をゼロとする
+        }
+
+        // 再試行のロジック: パラメータの調整
+        RCLCPP_WARN_STREAM(this->get_logger(), "Retrying with adjusted parameters.");
+        // パラメータの元の値を保存
+        casadi::DM Q_original = Q;
+        casadi::DM R_original = R;
+        int N_original = N;
+
+        // 再度最適化問題を解く
+        Q *= 0.9; // 重み行列Qの調整
+        R *= 1.1; // 重み行列Rの調整
+        N -= 1;   // 予測ホライズンの短縮
+        opti.minimize(cost);
+        opti.solver("ipopt");
+        casadi::OptiSol sol_retry = opti.solve();
+
+        // MPC予測軌道の値を保存
+        mpc_predicted_path_val = sol_retry.value(x);
+
+        // 結果を出力
+        casadi::DM xopt = sol_retry.value(x);
+        casadi::DM uopt = sol_retry.value(u(Slice(), 0));
+        casadi::DM Jopt = sol_retry.value(cost);
+
+        // パラメータを元の値に戻す
+        Q = Q_original;
+        R = R_original;
+        N = N_original;
+
+        return uopt;
+    }
   }
 
   casadi::DM update_state(const casadi::DM & xTrue, const casadi::DM & uopt)
